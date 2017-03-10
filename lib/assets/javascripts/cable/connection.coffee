@@ -1,11 +1,14 @@
+#= require ./connection_monitor
 # Encapsulate the cable connection held by the consumer. This is an internal class not intended for direct user manipulation.
-
 {message_types} = Cable.INTERNAL
 
 class Cable.Connection
   @reopenDelay: 500
 
   constructor: (@consumer) ->
+    {@subscriptions} = @consumer
+    @monitor = new Cable.ConnectionMonitor this
+    @disconnected = true
     @open()
 
   send: (data) ->
@@ -16,27 +19,41 @@ class Cable.Connection
       false
 
   open: =>
-    if @webSocket and not @isState("closed")
-      throw new Error("Existing connection must be closed before opening")
+    if @isActive()
+      #if @webSocket and not @isState("closed") and not @isOpen
+      Cable.log("Attempted to open WebSocket, but existing socket is #{@getState()}")
+      false
+      #throw new Error("Existing connection must be closed before opening")
     else
-      @webSocket = new WebSocket(@consumer.url)
+      Cable.log("Opening WebSocket, current state is #{@getState()}")
+      @uninstallEventHandlers() if @webSocket?
+      @webSocket = new Cable.WebSocket(@consumer.url)
       @installEventHandlers()
+      @monitor.start()
       true
 
-  close: ->
-    @webSocket?.close()
+  close: ({allowReconnect} = {allowReconnect: true}) ->
+    @monitor.stop() unless allowReconnect
+    @webSocket?.close() if @isActive()
 
   reopen: ->
-    if @isState("closed")
-      @open()
-    else
+    Cable.log("Reopening WebSocket, current state is #{@getState()}")
+    if @isActive()
       try
         @close()
+      catch error
+        Cable.log("Failed to reopen WebSocket", error)
       finally
+        Cable.log("Reopening WebSocket in #{@constructor.reopenDelay}ms")
         setTimeout(@open, @constructor.reopenDelay)
+    else
+      @open()
 
   isOpen: ->
     @isState("open")
+
+  isActive: ->
+    @isState("open", "connecting")
 
   # Private
 
@@ -53,6 +70,11 @@ class Cable.Connection
       @webSocket["on#{eventName}"] = handler
     return
 
+  uninstallEventHandlers: ->
+    for eventName of @events
+      @webSocket["on#{eventName}"] = ->
+    return
+
   events:
     message: (event) ->
       {identifier, message, type} = JSON.parse(event.data)
@@ -63,22 +85,26 @@ class Cable.Connection
         when message_types.rejection
           @consumer.subscriptions.reject(identifier)
         else
+          @monitor.recordPing() if identifier == "_ping"
           @consumer.subscriptions.notify(identifier, "received", message)
 
     open: ->
       @disconnected = false
       @consumer.subscriptions.reload()
 
+    open: ->
+      Cable.log("WebSocket onopen event")
+      @disconnected = false
+
     close: ->
-      @disconnect()
+      Cable.log("WebSocket onclose event")
+      return if @disconnected
+      @disconnected = true
+      @monitor.recordDisconnect()
+      @subscriptions.notifyAll("disconnected")
 
     error: ->
-      @disconnect()
-
-  disconnect: ->
-    return if @disconnected
-    @disconnected = true
-    @consumer.subscriptions.notifyAll("disconnected")
+      Cable.log("WebSocket onerror event")
 
   toJSON: ->
     state: @getState()

@@ -7,54 +7,69 @@ class Cable.ConnectionMonitor
 
   @staleThreshold: 6 # Server::Connections::BEAT_INTERVAL * 2 (missed two pings)
 
-  identifier: Cable.INTERNAL.identifiers.ping
-
-  constructor: (@consumer) ->
-    @consumer.subscriptions.add(this)
-    @start()
-
-  connected: ->
-    @reset()
-    @pingedAt = now()
-    delete @disconnectedAt
-
-  disconnected: ->
-    @disconnectedAt = now()
-
-  received: ->
-    @pingedAt = now()
-
-  reset: ->
+  constructor: (@connection) ->
     @reconnectAttempts = 0
 
   start: ->
-    @reset()
-    delete @stoppedAt
-    @startedAt = now()
-    @poll()
-    document.addEventListener("visibilitychange", @visibilityDidChange)
+    unless @isRunning()
+      @startedAt = now()
+      delete @stoppedAt
+      @startPolling()
+      document.addEventListener("visibilitychange", @visibilityDidChange)
+      Cable.log("ConnectionMonitor started. pollInterval = #{@getPollInterval()} ms")
 
   stop: ->
-    @stoppedAt = now()
-    document.removeEventListener("visibilitychange", @visibilityDidChange)
+    if @isRunning()
+      @stoppedAt = now()
+      @stopPolling()
+      document.removeEventListener("visibilitychange", @visibilityDidChange)
+      Cable.log("ConnectionMonitor stopped")
+
+  isRunning: ->
+    @startedAt? and not @stoppedAt?
+
+  recordPing: ->
+    @pingedAt = now()
+
+  recordConnect: ->
+    @reconnectAttempts = 0
+    @recordPing()
+    delete @disconnectedAt
+    Cable.log("ConnectionMonitor recorded connect")
+
+  recordDisconnect: ->
+    @disconnectedAt = now()
+    Cable.log("ConnectionMonitor recorded disconnect")
+
+  # Private
+
+  startPolling: ->
+    @stopPolling()
+    @poll()
+
+  stopPolling: ->
+    clearTimeout(@pollTimeout)
 
   poll: ->
-    setTimeout =>
-      unless @stoppedAt
-        @reconnectIfStale()
-        @poll()
-    , @getInterval()
+    @pollTimeout = setTimeout =>
+      @reconnectIfStale()
+      @poll()
+    , @getPollInterval()
 
-  getInterval: ->
+  getPollInterval: ->
     {min, max} = @constructor.pollInterval
     interval = 5 * Math.log(@reconnectAttempts + 1)
-    clamp(interval, min, max) * 1000
+    Math.round(clamp(interval, min, max) * 1000)
 
   reconnectIfStale: ->
     if @connectionIsStale()
+      Cable.log("ConnectionMonitor detected stale connection. reconnectAttempts = #{@reconnectAttempts}, pollInterval = #{@getPollInterval()} ms, time disconnected = #{secondsSince(@disconnectedAt)} s, stale threshold = #{@constructor.staleThreshold} s")
       @reconnectAttempts++
-      unless @disconnectedRecently()
-        @consumer.connection.reopen()
+      if @disconnectedRecently()
+        Cable.log("ConnectionMonitor skipping reopening recent disconnect")
+      else
+        Cable.log("ConnectionMonitor reopening")
+        @connection.reopen()
 
   connectionIsStale: ->
     secondsSince(@pingedAt ? @startedAt) > @constructor.staleThreshold
@@ -65,14 +80,10 @@ class Cable.ConnectionMonitor
   visibilityDidChange: =>
     if document.visibilityState is "visible"
       setTimeout =>
-        if @connectionIsStale() or not @consumer.connection.isOpen()
-          @consumer.connection.reopen()
+        if @connectionIsStale() or not @connection.isOpen()
+          Cable.log("ConnectionMonitor reopening stale connection on visibilitychange. visbilityState = #{document.visibilityState}")
+          @connection.reopen()
       , 200
-
-  toJSON: ->
-    interval = @getInterval()
-    connectionIsStale = @connectionIsStale()
-    {@startedAt, @stoppedAt, @pingedAt, @reconnectAttempts, connectionIsStale, interval}
 
   now = ->
     new Date().getTime()

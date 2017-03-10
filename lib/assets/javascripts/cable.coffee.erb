@@ -3,6 +3,8 @@
 
 @Cable =
   INTERNAL: <%= ActionCable::INTERNAL.to_json %>
+  logger: window.console
+  WebSocket: window.WebSocket
 
   createConsumer: (url = @getConfig("url")) ->
     new Cable.Consumer @createWebSocketURL(url)
@@ -21,3 +23,7 @@
       a.href
     else
       url
+
+  log: (messages...) ->
+    messages.push(Date.now())
+    @logger.log("[ActionCable]", messages...)
