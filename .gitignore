@@ -1,2 +1,4 @@
 /gemfiles/*.lock
 /test/tests.log
+/tmp
+/lib/assets
