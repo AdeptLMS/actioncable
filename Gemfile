@@ -1,8 +1,10 @@
 source 'https://rubygems.org'
 
-gem 'activesupport', github: 'rails/rails'
-gem 'actionpack', github: 'rails/rails'
-gem 'arel', github: 'rails/arel'
-gem 'rack', github: 'rack/rack'
+gem 'activesupport', '~> 4.2.8'
+gem 'actionpack', '~> 4.2.8'
+gem 'arel'
+gem 'rack'
+gem 'rake'
+gem 'puma'
 
 gemspec

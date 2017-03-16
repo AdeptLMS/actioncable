@@ -1,13 +1,13 @@
+#= export ActionCable
 #= require_self
-#= require cable/consumer
+#= require ./action_cable/consumer
 
-@Cable =
+@ActionCable =
   INTERNAL: <%= ActionCable::INTERNAL.to_json %>
-  logger: window.console
-  WebSocket: window.WebSocket
 
-  createConsumer: (url = @getConfig("url")) ->
-    new Cable.Consumer @createWebSocketURL(url)
+  createConsumer: (url) ->
+    url ?= @getConfig("url") ? @INTERNAL.default_mount_path
+    new ActionCable.Consumer @createWebSocketURL(url)
 
   getConfig: (name) ->
     element = document.head.querySelector("meta[name='action-cable-#{name}']")
@@ -24,6 +24,13 @@
     else
       url
 
+  startDebugging: ->
+    @debugging = true
+
+  stopDebugging: ->
+    @debugging = null
+
   log: (messages...) ->
-    messages.push(Date.now())
-    @logger.log("[ActionCable]", messages...)
+    if @debugging
+      messages.push(Date.now())
+      console.log("[ActionCable]", messages...)

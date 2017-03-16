@@ -1,67 +1,57 @@
-require 'active_support/core_ext/hash/indifferent_access'
-
 module ActionCable
   module Server
-    # An instance of this configuration object is available via ActionCable.server.config, which allows you to tweak the configuration points
+    # An instance of this configuration object is available via ActionCable.server.config, which allows you to tweak Action Cable configuration
     # in a Rails config initializer.
     class Configuration
       attr_accessor :logger, :log_tags
-      attr_accessor :connection_class, :worker_pool_size
-      attr_accessor :redis_path, :channels_path
-      attr_accessor :disable_request_forgery_protection, :allowed_request_origins
-      attr_accessor :url
+      attr_accessor :use_faye, :connection_class, :worker_pool_size
+      attr_accessor :disable_request_forgery_protection, :allowed_request_origins, :allow_same_origin_as_host
+      attr_accessor :cable, :url, :mount_path
 
       def initialize
-        @logger   = Rails.logger
         @log_tags = []
 
-        @connection_class  = ApplicationCable::Connection
-        @worker_pool_size  = 100
-
-        @redis_path    = Rails.root.join('config/redis/cable.yml')
-        @channels_path = Rails.root.join('app/channels')
+        @connection_class = -> { ActionCable::Connection::Base }
+        @worker_pool_size = 4
 
         @disable_request_forgery_protection = false
+        @allow_same_origin_as_host = true
       end
 
-      def log_to_stdout
-        console = ActiveSupport::Logger.new($stdout)
-        console.formatter = @logger.formatter
-        console.level = @logger.level
+      # Returns constant of subscription adapter specified in config/cable.yml.
+      # If the adapter cannot be found, this will default to the Redis adapter.
+      # Also makes sure proper dependencies are required.
+      def pubsub_adapter
+        adapter = (cable.fetch('adapter') { 'redis' })
+        path_to_adapter = "action_cable/subscription_adapter/#{adapter}"
+        begin
+          require path_to_adapter
+        rescue Gem::LoadError => e
+          raise Gem::LoadError, "Specified '#{adapter}' for Action Cable pubsub adapter, but the gem is not loaded. Add `gem '#{e.name}'` to your Gemfile (and ensure its version is at the minimum required by Action Cable)."
+        rescue LoadError => e
+          raise LoadError, "Could not load '#{path_to_adapter}'. Make sure that the adapter in config/cable.yml is valid. If you use an adapter other than 'postgresql' or 'redis' add the necessary adapter gem to the Gemfile.", e.backtrace
+        end
 
-        @logger.extend(ActiveSupport::Logger.broadcast(console))
+        adapter = adapter.camelize
+        adapter = 'PostgreSQL' if adapter == 'Postgresql'
+        "ActionCable::SubscriptionAdapter::#{adapter}".constantize
       end
 
-      def channel_paths
-        @channels ||= Dir["#{channels_path}/**/*_channel.rb"]
-      end
-
-      def channel_class_names
-        @channel_class_names ||= channel_paths.collect do |channel_path|
-          Pathname.new(channel_path).basename.to_s.split('.').first.camelize
+      def event_loop_class
+        if use_faye
+          ActionCable::Connection::FayeEventLoop
+        else
+          ActionCable::Connection::StreamEventLoop
         end
       end
 
-      def redis
-        @redis ||= config_for(redis_path).with_indifferent_access
-      end
-
-      private
-        # FIXME: Extract this from Rails::Application in a way it can be used here.
-        def config_for(path)
-          if path.exist?
-            require "yaml"
-            require "erb"
-            (YAML.load(ERB.new(path.read).result) || {})[Rails.env] || {}
-          else
-            raise "Could not load configuration. No such file - #{path}"
-          end
-        rescue Psych::SyntaxError => e
-          raise "YAML syntax error occurred while parsing #{path}. " \
-            "Please note that YAML must be consistently indented using spaces. Tabs are not allowed. " \
-            "Error: #{e.message}"
+      def client_socket_class
+        if use_faye
+          ActionCable::Connection::FayeClientSocket
+        else
+          ActionCable::Connection::ClientSocket
         end
+      end
     end
   end
 end
-
